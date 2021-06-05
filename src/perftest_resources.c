@@ -3037,6 +3037,142 @@ cleaning:
 	return return_value;
 }
 
+int run_iter_bw_simple(struct pingpong_context *ctx,struct perftest_parameters *user_param)
+{
+	uint64_t           	totscnt = 0;
+	uint64_t       	   	totccnt = 0;
+	int                	i = 0;
+	int                	index,ne;
+	uint64_t	   	tot_iters;
+	int			err = 0;
+	struct ibv_wc 	   	*wc = NULL;
+	int 			num_of_qps = user_param->num_of_qps;
+	/* Rate Limiter*/
+	int 			rate_limit_pps = 0;
+	double 			gap_time = 0;	/* in usec */
+	cycles_t 		gap_cycles = 0;	/* in cycles */
+	cycles_t 		gap_deadline = 0;
+	unsigned int 		number_of_bursts = 0;
+	int 			burst_iter = 0;
+	int 			is_sending_burst = 0;
+	int 			cpu_mhz = 0;
+	int 			return_value = 0;
+	int			wc_id;
+	int			send_flows_index = 0;
+	uintptr_t		primary_send_addr = ctx->sge_list[0].addr;
+	int			address_offset = 0;
+	int			flows_burst_iter = 0;
+
+	#ifdef HAVE_IBV_WR_API
+	if (user_param->connection_type != RawEth)
+		ctx_post_send_work_request_func_pointer(ctx, user_param);
+	#endif
+
+	ALLOCATE(wc ,struct ibv_wc ,CTX_POLL_BATCH);
+	if (user_param->test_type == DURATION) {
+		duration_param=user_param;
+		duration_param->state = START_STATE;
+		signal(SIGALRM, catch_alarm);
+		if (user_param->margin > 0 )
+			alarm(user_param->margin);
+		else
+			catch_alarm(0); /* move to next state */
+
+		user_param->iters = 0;
+	}
+
+	/* Will be 0, in case of Duration (look at force_dependencies or in the exp above). */
+	tot_iters = (uint64_t)user_param->iters*num_of_qps;
+
+	if (user_param->test_type == DURATION && user_param->state != START_STATE && user_param->margin > 0) {
+		fprintf(stderr, "Failed: margin is not long enough (taking samples before warmup ends)\n");
+		fprintf(stderr, "Please increase margin or decrease tx_depth\n");
+		return_value = FAILURE;
+		goto cleaning;
+	}
+
+	/* main loop for posting */
+	while (totscnt < tot_iters  || totccnt < tot_iters ||
+		(user_param->test_type == DURATION && user_param->state != END_STATE) ) {
+
+		/* main loop to run over all the qps and post each time n messages */
+		for (index =0 ; index < num_of_qps ; index++) {
+
+			while ((ctx->scnt[index] < user_param->iters || user_param->test_type == DURATION) &&
+					(ctx->scnt[index] - ctx->ccnt[index] + user_param->post_list) <= (user_param->tx_depth) &&
+					!((user_param->rate_limit_type == SW_RATE_LIMIT ) && is_sending_burst == 0)) {
+
+
+				if (user_param->post_list == 1 && (ctx->scnt[index] % user_param->cq_mod == 0 && user_param->cq_mod > 1)
+					&& !(ctx->scnt[index] == (user_param->iters - 1) && user_param->test_type == ITERATIONS)) {
+
+					ctx->wr[index].send_flags &= ~IBV_SEND_SIGNALED;
+				}
+
+				if (user_param->test_type == DURATION && user_param->state == END_STATE)
+					break;
+
+				err = post_send_method(ctx, index, user_param);
+				if (err) {
+					fprintf(stderr,"Couldn't post send: qp %d scnt=%lu \n",index,ctx->scnt[index]);
+					return_value = FAILURE;
+					goto cleaning;
+				}
+
+				ctx->scnt[index] += user_param->post_list;
+				totscnt += user_param->post_list;
+
+				/* ask for completion on this wr */
+				if (user_param->post_list == 1 &&
+						(ctx->scnt[index]%user_param->cq_mod == user_param->cq_mod - 1 ||
+							(user_param->test_type == ITERATIONS && ctx->scnt[index] == user_param->iters - 1))) {
+						ctx->wr[index].send_flags |= IBV_SEND_SIGNALED;
+				}
+			}
+		}
+		if (totccnt < tot_iters || (user_param->test_type == DURATION &&  totccnt < totscnt)) {
+				ne = ibv_poll_cq(ctx->send_cq, CTX_POLL_BATCH, wc);
+				if (ne > 0) {
+					for (i = 0; i < ne; i++) {
+						wc_id = (int)wc[i].wr_id;
+
+						// if (wc[i].status != IBV_WC_SUCCESS) {
+						// 	NOTIFY_COMP_ERROR_SEND(wc[i],totscnt,totccnt);
+						// 	return_value = FAILURE;
+						// 	goto cleaning;
+						// }
+
+						ctx->ccnt[wc_id] += user_param->cq_mod;
+						totccnt += user_param->cq_mod;
+						// if (user_param->noPeak == OFF) {
+						// 	if (totccnt > tot_iters)
+						// 		user_param->tcompleted[user_param->iters*num_of_qps - 1] = get_cycles();
+						// 	else
+						// 		user_param->tcompleted[totccnt-1] = get_cycles();
+						// }
+
+						if (user_param->test_type==DURATION && user_param->state == SAMPLE_STATE) {
+							// if (user_param->report_per_port) {
+							// 	user_param->iters_per_port[user_param->port_by_qp[wc_id]] += user_param->cq_mod;
+							// }
+							user_param->iters += user_param->cq_mod;
+						}
+					}
+
+				} else if (ne < 0) {
+					fprintf(stderr, "poll CQ failed %d\n",ne);
+					return_value = FAILURE;
+					goto cleaning;
+					}
+		}
+	}
+cleaning:
+
+	free(wc);
+	return return_value;
+}
+
+
 /******************************************************************************
  *
  ******************************************************************************/

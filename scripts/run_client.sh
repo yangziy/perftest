@@ -5,11 +5,12 @@ set -x
 ./ib_read_bw                 \
 --ib-dev=mlx5_1                     \
              --CPU-freq             \
-             --duration=10          \
+             --duration=5          \
              --port=10000           \
              --size=2048            \
              --post_list=32         \
              --qp=5                 \
+             --cq-mod=16            \
              --mr_per_qp            \
              10.0.3.9               
 
