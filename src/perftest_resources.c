@@ -3084,9 +3084,6 @@ int run_iter_bw(struct pingpong_context *ctx,struct perftest_parameters *user_pa
 		user_param->iters = 0;
 	}
 
-	if (user_param->duplex && (user_param->use_xrc || user_param->connection_type == DC))
-		num_of_qps /= 2;
-
 	/* Will be 0, in case of Duration (look at force_dependencies or in the exp above). */
 	tot_iters = (uint64_t)user_param->iters*num_of_qps;
 
@@ -3097,68 +3094,23 @@ int run_iter_bw(struct pingpong_context *ctx,struct perftest_parameters *user_pa
 		goto cleaning;
 	}
 
-	if (user_param->test_type == ITERATIONS && user_param->noPeak == ON)
-		user_param->tposted[0] = get_cycles();
-
-	/* If using rate limiter, calculate gap time between bursts */
-	if (user_param->rate_limit_type == SW_RATE_LIMIT ) {
-		/* Calculate rate limit in pps */
-		switch (user_param->rate_units) {
-			case MEGA_BYTE_PS:
-				rate_limit_pps = ((double)(user_param->rate_limit) / user_param->size) * 1048576;
-				break;
-			case GIGA_BIT_PS:
-				rate_limit_pps = ((double)(user_param->rate_limit) / (user_param->size * 8)) * 1000000000;
-				break;
-			case PACKET_PS:
-				rate_limit_pps = user_param->rate_limit;
-				break;
-			default:
-				fprintf(stderr, " Failed: Unknown rate limit units\n");
-				return_value = FAILURE;
-				goto cleaning;
-		}
-		cpu_mhz = get_cpu_mhz(user_param->cpu_freq_f);
-		if (cpu_mhz <= 0) {
-			fprintf(stderr, "Failed: couldn't acquire cpu frequency for rate limiter.\n");
-		}
-		number_of_bursts = rate_limit_pps / user_param->burst_size;
-		gap_time = 1000000 * (1.0 / number_of_bursts);
-		gap_cycles = cpu_mhz * gap_time;
-	}
-
 	/* main loop for posting */
 	while (totscnt < tot_iters  || totccnt < tot_iters ||
 		(user_param->test_type == DURATION && user_param->state != END_STATE) ) {
 
 		/* main loop to run over all the qps and post each time n messages */
 		for (index =0 ; index < num_of_qps ; index++) {
-			if (user_param->rate_limit_type == SW_RATE_LIMIT && is_sending_burst == 0) {
-				if (gap_deadline > get_cycles()) {
-					/* Go right to cq polling until gap time is over. */
-					continue;
-				}
-				gap_deadline = get_cycles() + gap_cycles;
-				is_sending_burst = 1;
-				burst_iter = 0;
-			}
+
 			while ((ctx->scnt[index] < user_param->iters || user_param->test_type == DURATION) &&
 					(ctx->scnt[index] - ctx->ccnt[index] + user_param->post_list) <= (user_param->tx_depth) &&
 					!((user_param->rate_limit_type == SW_RATE_LIMIT ) && is_sending_burst == 0)) {
 
-				if (ctx->send_rcredit) {
-					uint32_t swindow = ctx->scnt[index] + user_param->post_list - ctx->credit_buf[index];
-					if (swindow >= user_param->rx_depth)
-						break;
-				}
+
 				if (user_param->post_list == 1 && (ctx->scnt[index] % user_param->cq_mod == 0 && user_param->cq_mod > 1)
 					&& !(ctx->scnt[index] == (user_param->iters - 1) && user_param->test_type == ITERATIONS)) {
 
 					ctx->wr[index].send_flags &= ~IBV_SEND_SIGNALED;
 				}
-
-				if (user_param->noPeak == OFF)
-					user_param->tposted[totscnt] = get_cycles();
 
 				if (user_param->test_type == DURATION && user_param->state == END_STATE)
 					break;
@@ -3170,31 +3122,6 @@ int run_iter_bw(struct pingpong_context *ctx,struct perftest_parameters *user_pa
 					goto cleaning;
 				}
 
-				/* if we have more than single flow and the burst iter is the last one */
-				if (user_param->flows != DEF_FLOWS) {
-					if (++flows_burst_iter == user_param->flows_burst) {
-						flows_burst_iter = 0;
-						/* inc the send_flows_index and update the address */
-						if (++send_flows_index == user_param->flows)
-							send_flows_index = 0;
-						address_offset = send_flows_index * ctx->flow_buff_size;
-						ctx->sge_list[0].addr = primary_send_addr + address_offset;
-					}
-				}
-
-				/* in multiple flow scenarios we will go to next cycle buffer address in the main buffer*/
-				if (user_param->post_list == 1 && user_param->size <= (ctx->cycle_buffer / 2)) {
-						increase_loc_addr(ctx->wr[index].sg_list,user_param->size, ctx->scnt[index],
-								ctx->my_addr[index] + address_offset , 0, ctx->cache_line_size,
-								ctx->cycle_buffer);
-
-					if (user_param->verb != SEND) {
-						increase_rem_addr(&ctx->wr[index], user_param->size,
-								ctx->scnt[index], ctx->rem_addr[index], user_param->verb,
-								ctx->cache_line_size, ctx->cycle_buffer);
-					}
-				}
-
 				ctx->scnt[index] += user_param->post_list;
 				totscnt += user_param->post_list;
 
@@ -3204,48 +3131,33 @@ int run_iter_bw(struct pingpong_context *ctx,struct perftest_parameters *user_pa
 							(user_param->test_type == ITERATIONS && ctx->scnt[index] == user_param->iters - 1))) {
 						ctx->wr[index].send_flags |= IBV_SEND_SIGNALED;
 				}
-
-				/* Check if a full burst was sent. */
-				if (user_param->rate_limit_type == SW_RATE_LIMIT) {
-					burst_iter += user_param->post_list;
-					if (burst_iter >= user_param->burst_size) {
-						is_sending_burst = 0;
-					}
-				}
 			}
 		}
 		if (totccnt < tot_iters || (user_param->test_type == DURATION &&  totccnt < totscnt)) {
-				if (user_param->use_event) {
-					if (ctx_notify_events(ctx->channel)) {
-						fprintf(stderr, "Couldn't request CQ notification\n");
-						return_value = FAILURE;
-						goto cleaning;
-					}
-				}
 				ne = ibv_poll_cq(ctx->send_cq, CTX_POLL_BATCH, wc);
 				if (ne > 0) {
 					for (i = 0; i < ne; i++) {
 						wc_id = (int)wc[i].wr_id;
 
-						if (wc[i].status != IBV_WC_SUCCESS) {
-							NOTIFY_COMP_ERROR_SEND(wc[i],totscnt,totccnt);
-							return_value = FAILURE;
-							goto cleaning;
-						}
+						// if (wc[i].status != IBV_WC_SUCCESS) {
+						// 	NOTIFY_COMP_ERROR_SEND(wc[i],totscnt,totccnt);
+						// 	return_value = FAILURE;
+						// 	goto cleaning;
+						// }
 
 						ctx->ccnt[wc_id] += user_param->cq_mod;
 						totccnt += user_param->cq_mod;
-						if (user_param->noPeak == OFF) {
-							if (totccnt > tot_iters)
-								user_param->tcompleted[user_param->iters*num_of_qps - 1] = get_cycles();
-							else
-								user_param->tcompleted[totccnt-1] = get_cycles();
-						}
+						// if (user_param->noPeak == OFF) {
+						// 	if (totccnt > tot_iters)
+						// 		user_param->tcompleted[user_param->iters*num_of_qps - 1] = get_cycles();
+						// 	else
+						// 		user_param->tcompleted[totccnt-1] = get_cycles();
+						// }
 
 						if (user_param->test_type==DURATION && user_param->state == SAMPLE_STATE) {
-							if (user_param->report_per_port) {
-								user_param->iters_per_port[user_param->port_by_qp[wc_id]] += user_param->cq_mod;
-							}
+							// if (user_param->report_per_port) {
+							// 	user_param->iters_per_port[user_param->port_by_qp[wc_id]] += user_param->cq_mod;
+							// }
 							user_param->iters += user_param->cq_mod;
 						}
 					}
@@ -3257,8 +3169,6 @@ int run_iter_bw(struct pingpong_context *ctx,struct perftest_parameters *user_pa
 					}
 		}
 	}
-	if (user_param->noPeak == ON && user_param->test_type == ITERATIONS)
-		user_param->tcompleted[0] = get_cycles();
 
 cleaning:
 
