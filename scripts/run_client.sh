@@ -10,6 +10,7 @@ set -x
              --size=2048            \
              --post_list=32         \
              --qp=5                 \
+             --mr_per_qp            \
              10.0.3.9               
 
 set +x

@@ -1423,12 +1423,182 @@ int create_single_mr(struct pingpong_context *ctx, struct perftest_parameters *u
 /******************************************************************************
  *
  ******************************************************************************/
+char* create_buffer(struct pingpong_context *ctx, struct perftest_parameters *user_param, uint64_t buff_size)
+{
+	char *buf;
+
+	#if defined(__FreeBSD__)
+	ctx->is_contig_supported = FAILURE;
+	#endif
+
+	/* ODP */
+	#ifdef HAVE_EX_ODP
+	if (user_param->use_odp) {
+		if ( !check_odp_support(ctx) )
+			return NULL;
+
+		/* ODP does not support contig pages */
+		ctx->is_contig_supported = FAILURE;
+	}
+	#endif
+
+
+	#ifdef HAVE_CUDA
+	if (user_param->use_cuda) {
+		CUdeviceptr d_A;
+		int error;
+		const size_t gpu_page_size = 64 * 1024;
+		size_t size = (buff_size + gpu_page_size - 1) &
+			~(gpu_page_size - 1);
+
+		ctx->is_contig_supported = FAILURE;
+
+		printf("cuMemAlloc() of a %zd bytes GPU buffer\n",
+		       buff_size);
+		error = cuMemAlloc(&d_A, size);
+		if (error != CUDA_SUCCESS) {
+			printf("cuMemAlloc error=%d\n", error);
+			return NULL;
+		}
+
+		printf("allocated GPU buffer address at %016llx pointer=%p\n",
+		       d_A, (void *)d_A);
+		buf = (void *)d_A;
+	} else
+	#endif
+
+	#ifdef HAVE_ROCM
+	if (user_param->use_rocm) {
+		void* d_A;
+		hipError_t error;
+		const size_t gpu_page_size = 64 * 1024;
+		size_t size = (buff_size + gpu_page_size - 1) &
+			~(gpu_page_size - 1);
+
+		ctx->is_contig_supported = FAILURE;
+
+		error = hipMalloc(&d_A, size);
+		if (error != hipSuccess) {
+			printf("hipMalloc error=%d\n", error);
+			return NULL;
+		}
+
+		printf("allocated %zd bytes of GPU buffer at %p\n", size, d_A);
+		buf = d_A;
+	} else
+	#endif
+
+	if (user_param->mmap_file != NULL) {
+		// #if defined(__FreeBSD__)
+		// posix_memalign(ctx->buf, user_param->cycle_buffer, buff_size);
+		// #else
+		// ctx->buf = memalign(user_param->cycle_buffer, buff_size);
+		// #endif
+		// if (pp_init_mmap(ctx, buff_size, user_param->mmap_file,
+		// 		 user_param->mmap_offset))
+		// {
+		// 	fprintf(stderr, "Couldn't allocate work buf.\n");
+		// 	return FAILURE;
+		// }
+		errno = ENOTSUP;
+		perror("user_param->mmap_file not supported");
+		exit(2);
+
+	} else {
+		/* Allocating buffer for data, in case driver not support contig pages. */
+		if (ctx->is_contig_supported == FAILURE) {
+			#if defined(__FreeBSD__)
+			posix_memalign(&buf, user_param->cycle_buffer, buff_size);
+			#else
+			if (user_param->use_hugepages) {
+				// if (alloc_hugepage_region(ctx, qp_index) != SUCCESS){
+				// 	fprintf(stderr, "Failed to allocate hugepage region.\n");
+				// 	return FAILURE;
+				// }
+				// memset(buf, 0, buff_size);
+				errno = ENOTSUP;
+				perror("user_param->use_hugepages not supported");
+				exit(1);
+			} else if  (ctx->is_contig_supported == FAILURE) {
+				buf = memalign(user_param->cycle_buffer, buff_size);
+			}
+			#endif
+			if (!buf) {
+				fprintf(stderr, "Couldn't allocate work buf.\n");
+				buf = NULL;
+			}
+
+			memset(buf, 0, buff_size);
+		} else {
+			buf = NULL;
+		}
+	}
+	return buf;
+}
+
+int my_create_single_mr(struct pingpong_context *ctx, struct perftest_parameters *user_param, char *buf, struct ibv_pd *pd, struct ibv_mr **out_mr) {
+	int flags = IBV_ACCESS_LOCAL_WRITE;
+
+	#if defined(__FreeBSD__)
+	ctx->is_contig_supported = FAILURE;
+	#endif
+
+	/* ODP */
+	#ifdef HAVE_EX_ODP
+	if (user_param->use_odp) {
+		if ( !check_odp_support(ctx) )
+			return FAILURE;
+
+		/* ODP does not support contig pages */
+		ctx->is_contig_supported = FAILURE;
+		flags |= IBV_ACCESS_ON_DEMAND;
+	}
+	#endif
+
+	if (user_param->verb == WRITE) {
+		flags |= IBV_ACCESS_REMOTE_WRITE;
+	} else if (user_param->verb == READ) {
+		flags |= IBV_ACCESS_REMOTE_READ;
+		if (user_param->transport_type == IBV_TRANSPORT_IWARP)
+			flags |= IBV_ACCESS_REMOTE_WRITE;
+	} else if (user_param->verb == ATOMIC) {
+		flags |= IBV_ACCESS_REMOTE_ATOMIC;
+	}
+
+	#ifdef HAVE_RO
+	if (user_param->disable_pcir == 0) {
+		flags |= IBV_ACCESS_RELAXED_ORDERING;
+	}
+	#endif
+
+	/* Allocating Memory region and assigning our buffer to it. */
+	*out_mr = ibv_reg_mr(pd, buf, ctx->buff_size, flags);
+
+	if (!*out_mr) {
+		fprintf(stderr, "Couldn't allocate MR\n");
+		return FAILURE;
+	}
+
+	if (ctx->is_contig_supported == SUCCESS)
+		buf = (*out_mr)->addr;
+	
+	return SUCCESS;
+}
+
+/******************************************************************************
+ *
+ ******************************************************************************/
 int create_mr(struct pingpong_context *ctx, struct perftest_parameters *user_param)
 {
 	int i;
 
 	/* create first MR */
-	if (create_single_mr(ctx, user_param, 0)) {
+	ctx->buf[0] = create_buffer(ctx, user_param, ctx->buff_size);
+	if (ctx->buf[0] == NULL) {
+		fprintf(stderr, "failed to create buffer\n");
+		return 1;
+	}
+	if (my_create_single_mr(ctx, user_param, ctx->buf[0], ctx->pd, &ctx->mr[0])) {
 		fprintf(stderr, "failed to create mr\n");
 		return 1;
 	}
@@ -1436,7 +1606,13 @@ int create_mr(struct pingpong_context *ctx, struct perftest_parameters *user_par
 	/* create the rest if needed, or copy the first one */
 	for (i = 1; i < user_param->num_of_qps; i++) {
 		if (user_param->mr_per_qp) {
-			if (create_single_mr(ctx, user_param, i)) {
+			/* create first MR */
+			ctx->buf[i] = create_buffer(ctx, user_param, ctx->buff_size);
+			if (ctx->buf[i] == NULL) {
+				fprintf(stderr, "failed to create buffer\n");
+				return 1;
+			}
+			if (my_create_single_mr(ctx, user_param, ctx->buf[i], ctx->pd, &ctx->mr[i])) {
 				fprintf(stderr, "failed to create mr\n");
 				return 1;
 			}
