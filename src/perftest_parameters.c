@@ -3026,6 +3026,16 @@ static float calc_cpu_util (struct perftest_parameters *user_param)
 		return 0;
 }
 
+
+void print_report_bw_brief(struct perftest_parameters *user_param) {
+	double cycles_to_units = get_cpu_mhz(1) * 1000000;
+	double sum_of_test_cycles = ((double)(user_param->tcompleted[0] - user_param->tposted[0]));
+	int tsize = user_param->size;
+	double bw_avg = (tsize*user_param->iters * cycles_to_units * 8) / (sum_of_test_cycles * 0x40000000); //Gbps
+	double elapsed_time = sum_of_test_cycles / cycles_to_units;
+	printf("Elapsed time: %lf\nThroughput: %lf Gbps\n", elapsed_time, bw_avg);
+}
+
 /******************************************************************************
  *
  ******************************************************************************/
