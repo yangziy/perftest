@@ -404,6 +404,7 @@ struct perftest_parameters {
 	int				cpu_freq_f;
 	int				connection_type;
 	int				num_of_qps;
+	int				num_of_mrs;
 	int				use_event;
 	int				eq_num;
 	int				use_eq_num;

@@ -9,7 +9,7 @@ set -x
              --port=10000           \
              --size=2048            \
              --post_list=32         \
-             --mr_per_qp            \
-             --cq-mod=16            \
-             --qp=5                 
+             --num_of_mrs=3         \
+             --cq-mod=4             \
+             --qp=2                 
 set +x

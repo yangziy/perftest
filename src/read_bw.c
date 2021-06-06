@@ -127,10 +127,10 @@ int main(int argc, char *argv[])
 		return FAILURE;
 	}
 
-	ALLOCATE(my_dest , struct pingpong_dest , user_param.num_of_qps);
-	memset(my_dest, 0, sizeof(struct pingpong_dest)*user_param.num_of_qps);
-	ALLOCATE(rem_dest , struct pingpong_dest , user_param.num_of_qps);
-	memset(rem_dest, 0, sizeof(struct pingpong_dest)*user_param.num_of_qps);
+	ALLOCATE(my_dest , struct pingpong_dest , user_param.num_of_mrs);
+	memset(my_dest, 0, sizeof(struct pingpong_dest)*user_param.num_of_mrs);
+	ALLOCATE(rem_dest , struct pingpong_dest , user_param.num_of_mrs);
+	memset(rem_dest, 0, sizeof(struct pingpong_dest)*user_param.num_of_mrs);
 
 	/* Allocating arrays needed for the test. */
 	alloc_ctx(&ctx,&user_param);
@@ -161,7 +161,7 @@ int main(int argc, char *argv[])
 	/* Print basic test information. */
 	ctx_print_test_info(&user_param);
 
-	for (i=0; i < user_param.num_of_qps; i++) {
+	for (i=0; i < user_param.num_of_mrs; i++) {
 
 		/* shaking hands and gather the other side info. */
 		if (ctx_hand_shake(&user_comm,&my_dest[i],&rem_dest[i])) {
@@ -201,7 +201,7 @@ int main(int argc, char *argv[])
 
 	user_comm.rdma_params->side = REMOTE;
 
-	for (i=0; i < user_param.num_of_qps; i++) {
+	for (i=0; i < user_param.num_of_mrs; i++) {
 
 		if (ctx_hand_shake(&user_comm,&my_dest[i],&rem_dest[i])) {
 			fprintf(stderr," Failed to exchange data between server and clients\n");

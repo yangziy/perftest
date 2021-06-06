@@ -893,7 +893,7 @@ void alloc_ctx(struct pingpong_context *ctx,struct perftest_parameters *user_par
 	#endif
 	ALLOCATE(ctx->r_dctn, uint32_t, user_param->num_of_qps);
 	#endif
-	ALLOCATE(ctx->mr, struct ibv_mr*, user_param->num_of_qps);
+	ALLOCATE(ctx->mr, struct ibv_mr*, user_param->num_of_mrs);
 	ALLOCATE(ctx->buf, void* , user_param->num_of_qps);
 
 	if ((user_param->tst == BW || user_param->tst == LAT_BY_BW) && (user_param->machine == CLIENT || user_param->duplex)) {
@@ -973,7 +973,8 @@ int destroy_ctx(struct pingpong_context *ctx,
 		sleep(user_param->wait_destroy);
 	}
 
-	dereg_counter = (user_param->mr_per_qp) ? user_param->num_of_qps : 1;
+	// dereg_counter = (user_param->mr_per_qp) ? user_param->num_of_qps : 1;
+	dereg_counter = user_param->num_of_mrs;
 
 	if (user_param->work_rdma_cm == ON) {
 		rc = rdma_cm_disconnect_nodes(ctx, user_param);
@@ -1604,9 +1605,9 @@ int create_mr(struct pingpong_context *ctx, struct perftest_parameters *user_par
 	}
 
 	/* create the rest if needed, or copy the first one */
-	for (i = 1; i < user_param->num_of_qps; i++) {
-		if (user_param->mr_per_qp) {
-			/* create first MR */
+	for (i = 1; i < user_param->num_of_mrs; i++) {
+		// if (user_param->mr_per_qp) {
+		//	/* create first MR */
 			ctx->buf[i] = create_buffer(ctx, user_param, ctx->buff_size);
 			if (ctx->buf[i] == NULL) {
 				fprintf(stderr, "failed to create buffer\n");
@@ -1616,12 +1617,12 @@ int create_mr(struct pingpong_context *ctx, struct perftest_parameters *user_par
 				fprintf(stderr, "failed to create mr\n");
 				return 1;
 			}
-		} else {
-			ALLOCATE(ctx->mr[i], struct ibv_mr, 1);
-			memset(ctx->mr[i], 0, sizeof(struct ibv_mr));
-			ctx->mr[i] = ctx->mr[0];
-			ctx->buf[i] = ctx->buf[0] + (i*BUFF_SIZE(ctx->size, ctx->cycle_buffer));
-		}
+		// } else {
+		// 	ALLOCATE(ctx->mr[i], struct ibv_mr, 1);
+		// 	memset(ctx->mr[i], 0, sizeof(struct ibv_mr));
+		// 	ctx->mr[i] = ctx->mr[0];
+		// 	ctx->buf[i] = ctx->buf[0] + (i*BUFF_SIZE(ctx->size, ctx->cycle_buffer));
+		// }
 	}
 
 	return 0;
@@ -3058,6 +3059,18 @@ void start_alarm(struct perftest_parameters *user_param) {
 	}
 }
 
+
+struct ibv_send_wr *wr; // the wr to send
+
+void prepare_next_wr(struct pingpong_context *ctx, struct perftest_parameters *user_param
+) {
+	/* 
+		This is called each time a wr is to be sent.
+	*/
+	int idx = 0;
+	wr = &ctx->wr[idx]; // always send the first wr
+}
+
 int run_iter_bw_simple(struct pingpong_context *ctx,struct perftest_parameters *user_param)
 {
 	int i;
@@ -3088,15 +3101,15 @@ int run_iter_bw_simple(struct pingpong_context *ctx,struct perftest_parameters *
 		/* main loop to run over all the qps and post each time n messages */
 		// for (index =0 ; index < num_of_qps ; index++) {
 			int index = 0;
-			struct ibv_send_wr* wr = &ctx->wr[index];
 			while ((scnt - ccnt + post_list) <= tx_depth && user_param->state != END_STATE) {
+				prepare_next_wr(ctx, user_param);
 
 				if (post_list == 1 && (scnt % cq_mod == 0 && cq_mod > 1)) {
 					wr->send_flags &= ~IBV_SEND_SIGNALED;
 				}
 
 				struct ibv_send_wr 	*bad_wr = NULL;
-				err = ibv_post_send(ctx->qp[index], &ctx->wr[index*post_list], &bad_wr);
+				err = ibv_post_send(ctx->qp[index], wr, &bad_wr);
 				if (err) {
 					fprintf(stderr,"Couldn't post send: qp %d scnt=%lu \n",index,scnt);
 					goto cleaning;

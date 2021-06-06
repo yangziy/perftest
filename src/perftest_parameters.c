@@ -1942,6 +1942,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc)
 	static int use_promiscuous_flag = 0;
 	static int use_sniffer_flag = 0;
 	static int raw_mcast_flag = 0;
+	static int num_of_mrs_flag = 0;
 	static int use_res_domain_flag = 0;
 	static int mr_per_qp_flag = 0;
 	static int dlid_flag = 0;
@@ -2076,6 +2077,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc)
 			#endif
 			{.name = "raw_mcast", .has_arg = 0, .flag = &raw_mcast_flag, .val = 1},
 
+			{.name = "num_of_mrs",.has_arg = 1, .flag = &num_of_mrs_flag, .val = 1},
 			{.name = "mr_per_qp", .has_arg = 0, .flag = &mr_per_qp_flag, .val = 1},
 			{.name = "dlid", .has_arg = 1, .flag = &dlid_flag, .val = 1},
 			{.name = "tclass", .has_arg = 1, .flag = &tclass_flag, .val = 1},
@@ -2338,6 +2340,10 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc)
 			case 'v': user_param->mac_fwd = ON; break;
 			case 'G': user_param->use_rss = ON; break;
 			case 0: /* required for long options to work. */
+				if (num_of_mrs_flag) {
+					user_param->num_of_mrs = strtol(optarg, NULL, 0);
+					num_of_mrs_flag = 0;
+				}
 				if (pkey_flag) {
 					user_param->pkey_index = strtol(optarg,NULL,0);
 					pkey_flag = 0;
