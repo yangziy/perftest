@@ -333,7 +333,8 @@ int main(int argc, char *argv[])
 			return FAILURE;
 		}
 
-		print_report_bw(&user_param,&my_bw_rep);
+		print_report_bw(&user_param, &my_bw_rep);
+		print_report_bw_brief(&user_param);
 
 		if (user_param.duplex) {
 			xchg_bw_reports(&user_comm, &my_bw_rep,&rem_bw_rep,atof(user_param.rem_version));
