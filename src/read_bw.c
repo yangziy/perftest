@@ -328,10 +328,7 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		if(run_iter_bw_simple(&ctx,&user_param)) {
-			fprintf(stderr," Failed to complete run_iter_bw function successfully\n");
-			return FAILURE;
-		}
+		user_param.iters = run_iter_bw_simple(&ctx,&user_param);
 
 		print_report_bw(&user_param, &my_bw_rep);
 		print_report_bw_brief(&user_param);

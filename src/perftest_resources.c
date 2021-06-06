@@ -3047,8 +3047,6 @@ void start_alarm(struct perftest_parameters *user_param) {
 			alarm(user_param->margin);
 		else
 			catch_alarm(0); /* move to next state */
-
-		user_param->iters = 0;
 	}
 
 	/* Will be 0, in case of Duration (look at force_dependencies or in the exp above). */
@@ -3065,7 +3063,7 @@ int run_iter_bw_simple(struct pingpong_context *ctx,struct perftest_parameters *
 	int i;
 	uint64_t           	totscnt = 0;
 	uint64_t       	   	totccnt = 0;
-	int                	index,ne;
+	int                	index, ne;
 	uint64_t	   	tot_iters;
 	int			err = 0;
 	struct ibv_wc 	   	*wc = NULL;
@@ -3074,13 +3072,14 @@ int run_iter_bw_simple(struct pingpong_context *ctx,struct perftest_parameters *
 	int			wc_id;
 
 	ALLOCATE(wc ,struct ibv_wc ,CTX_POLL_BATCH);
-	tot_iters = (uint64_t)user_param->iters*user_param->num_of_qps;
-	int scnt = ctx->scnt[0];
-	int ccnt = ctx->ccnt[0];
+	tot_iters = 0;
+	int scnt = 0;
+	int ccnt = 0;
 	int cq_mod = user_param->cq_mod;
 	int post_list = user_param->post_list;
 	int tx_depth = user_param->tx_depth;
 
+	int iters = 0;
 	start_alarm(user_param);
 
 	/* main loop for posting */
@@ -3100,7 +3099,6 @@ int run_iter_bw_simple(struct pingpong_context *ctx,struct perftest_parameters *
 				err = ibv_post_send(ctx->qp[index], &ctx->wr[index*post_list], &bad_wr);
 				if (err) {
 					fprintf(stderr,"Couldn't post send: qp %d scnt=%lu \n",index,scnt);
-					return_value = FAILURE;
 					goto cleaning;
 				}
 
@@ -3108,7 +3106,7 @@ int run_iter_bw_simple(struct pingpong_context *ctx,struct perftest_parameters *
 				totscnt += post_list;
 
 				/* ask for completion on this wr */
-				if (post_list == 1 && (scnt%cq_mod == cq_mod - 1)) {
+				if (post_list == 1 && (scnt % cq_mod == cq_mod - 1)) {
 					wr->send_flags |= IBV_SEND_SIGNALED;
 				}
 			}
@@ -3122,22 +3120,20 @@ int run_iter_bw_simple(struct pingpong_context *ctx,struct perftest_parameters *
 					ccnt += cq_mod;
 
 					if (user_param->state == SAMPLE_STATE) {
-						user_param->iters += cq_mod;
+						iters += cq_mod;
 					}
 				}
 
 			} else if (ne < 0) {
 				fprintf(stderr, "poll CQ failed %d\n",ne);
-				return_value = FAILURE;
 				goto cleaning;
 			}
 		}
 	}
 
 cleaning:
-
 	free(wc);
-	return return_value;
+	return iters;
 }
 
 /******************************************************************************
